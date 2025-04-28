@@ -1,4 +1,4 @@
-FROM nvcr.io/nvidia/tensorrt:21.09-py3
+FROM nvcr.io/nvidia/tensorrt:23.03-py3
 
 ENV DEBIAN_FRONTEND=noninteractive
 ARG USERNAME=user
@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y \
     && apt clean \
     && rm -rf /var/lib/apt/lists/*
 
-RUN git clone https://github.com/ifzhang/ByteTrack \
+RUN git clone https://github.com/kaleo22/ByteTrack.git \
     && cd ByteTrack \
     && git checkout 3434c5e8bc6a5ae8ad530528ba8d9a431967f237 \
     && mkdir -p YOLOX_outputs/yolox_x_mix_det/track_vis \
