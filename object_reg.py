@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 from filterpy.kalman import KalmanFilter
+import cv2
 
 class ObjectAssociator:
     def __init__(self):
@@ -91,26 +92,41 @@ class ObjectAssociator:
 
     def register_objects(self, bbox, target):
  
-        self.Pkw = []
-        self.Lkw = []
-        self.Rad = []
-
-        if target.label == "car" and target.track_id not in [t[2] for t in self.Pkw]:
-            self.Pkw.append((self.frame_count, bbox, target.track_id, target.label))
-        elif target.label == "truck" and target.track_id not in [t[2] for t in self.Lkw]:
-            self.Lkw.append((self.frame_count, bbox, target.track_id, target.label))
-        elif target.label == "wheel" and target.track_id not in [t[2] for t in self.Rad]:
-            self.Rad.append((self.frame_count, bbox, target.track_id, target.label))
-
+        # self.Pkw = []
+        # self.Lkw = []
+        # self.Rad = []
+        # Braucht noch eine Update Funktion für current_rad, _pkw, __lkw
+        if target.label == "car":
+            idx = next((i for i, t in enumerate(self.Pkw) if t[2] == target.track_id), None)
+            if idx is None:
+                self.Pkw.append((self.frame_count, bbox, target.track_id, target.label))
+            else:
+                 self.Pkw[idx] = (self.frame_count, bbox, target.track_id, target.label)
+        elif target.label == "truck":
+            idx = next((i for i, t in enumerate(self.Lkw) if t[2] == target.track_id), None)
+            if idx is None:
+                self.Lkw.append((self.frame_count, bbox, target.track_id, target.label))
+            else:
+                self.Lkw[idx] = (self.frame_count, bbox, target.track_id, target.label)
+        elif target.label == "wheel":
+            idx = next((i for i, t in enumerate(self.Rad) if t[2] == target.track_id), None)
+            if idx is None:
+                self.Rad.append((self.frame_count, bbox, target.track_id, target.label))
+            else:
+                self.Rad[idx] = (self.frame_count, bbox, target.track_id, target.label)
 
     def associate_wheels_to_vehicles(self):
         frame = self.frame_count
         current_measured = set()
 
-        for wheel in self.Rad:
+        current_rad = [wheel for wheel in self.Rad if wheel[0] == frame]
+        current_pkw = [car for car in self.Pkw if car[0] == frame]
+        current_lkw = [truck for truck in self.Lkw if truck[0] == frame]
+
+        for wheel in current_rad:
             best_iob = 0
             best_vehicle = None
-            for vehicle in self.Pkw + self.Lkw:
+            for vehicle in current_pkw + current_lkw:
                 iob = bbox_intersection(wheel[1], vehicle[1])
                 self.data_collect(wheel[2], vehicle[2], iob, vehicle[3])
                 if iob > best_iob:
@@ -148,7 +164,11 @@ class ObjectAssociator:
         for v_id, wheels in self.associations.items():
             if not wheels:
                 continue
-            label = wheels[0]["label"]
+            vehicle = next((v for v in self.Pkw + self.Lkw if v[2] == v_id), None)
+            if vehicle is not None:
+                label = vehicle[3]
+            else:
+                label = None
             num_wheels = len(wheels)
             if label == "car":
                 classification[v_id] = "Auto"
@@ -164,6 +184,77 @@ class ObjectAssociator:
             else:
                 classification[v_id] = "Unbekannt"
         return classification
+    
+    def _get_vehicle_entry(self, v_id):
+        """
+        Liefert den letzten Eintrag (frame, bbox, track_id, label) für vehicle id.
+        """
+        candidates = [v for v in (self.Pkw + self.Lkw) if v[2] == v_id]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda t: t[0])  # größtes frame = zuletzt gesehen
+
+    @staticmethod
+    def _center(bbox):
+        x1, y1, x2, y2 = bbox
+        return (0.5*(x1+x2), 0.5*(y1+y2))
+
+    def ax_distance_bb(self, classification):
+        """
+        classification: dict {vehicle_id: class_string}
+        Returns:
+            dict {vehicle_id: {"axle_x": [...], "axle_dist": [...], "vehicle_bbox": [...], "wheel_centers": [...]} }
+        """
+        out = {}
+
+        for v_id, cls in classification.items():
+            wheels = self.associations.get(v_id, [])
+            veh = self._get_vehicle_entry(v_id)
+
+            if veh is None or not wheels:
+                out[v_id] = {"axle_x": [], "axle_dist": [], "vehicle_bbox": None, "wheel_centers": []}
+                continue
+
+            vehicle_bbox = veh[1]
+
+            # 1) Wheel centers holen
+            wheel_centers = [self._center(w["bbox"]) for w in wheels]
+            wheel_x = np.array([c[0] for c in wheel_centers], dtype=float)
+
+            # 2) Wenn du schon Achsen gruppiert hast -> HIER deine Achsenlogik rein
+            # Minimal: unique/cluster entlang x (du ersetzt das durch dein fertiges Clustering)
+            # Beispiel: sortieren und "nahe" Werte zusammenfassen
+            wheel_x_sorted = np.sort(wheel_x)
+
+            # --- Replace-Block: deine fertige Achsen-Gruppierung ---
+            # Hier ein ultra-minimaler Platzhalter:
+            # threshold z.B. 0.08 der Fahrzeugbreite im Bild
+            vx1, vy1, vx2, vy2 = vehicle_bbox
+            vW = max(1.0, (vx2 - vx1))
+            thr = 0.08 * vW
+
+            axle_x = []
+            current = [wheel_x_sorted[0]]
+            for x in wheel_x_sorted[1:]:
+                if abs(x - current[-1]) <= thr:
+                    current.append(x)
+                else:
+                    axle_x.append(float(np.mean(current)))
+                    current = [x]
+            axle_x.append(float(np.mean(current)))
+            axle_x.sort()
+            # --- /Replace-Block ---
+
+            axle_dist = [abs(axle_x[i+1] - axle_x[i]) for i in range(len(axle_x)-1)]
+
+            out[v_id] = {
+                "axle_x": axle_x,
+                "axle_dist": axle_dist,
+                "vehicle_bbox": vehicle_bbox,
+                "wheel_centers": wheel_centers
+            }
+
+        return out 
 
 def bbox_intersection(wheelbox, vehiclebox):
             # wheelbox und vehiclebox: [x1, y1, x2, y2]
@@ -180,3 +271,5 @@ def bbox_intersection(wheelbox, vehiclebox):
             #vehicleboxArea = (vehiclebox[2] - vehiclebox[0]) * (vehiclebox[3] - vehiclebox[1])
             intersection = interArea / float(wheelboxArea)
             return intersection
+
+
