@@ -139,3 +139,14 @@ docs/api
 events.out.tfevents*
 pretrained
 YOLOX_outputs
+createcsv.ipynb
+detection_results.csv
+wheel_vehicle_associations.csv
+inference/*
+input/*
+output/*
+output/wheeltracker_output.mp4
+wheel_vehicle_associations.csv
+manipulate.ipynb
+output/wheeltracker_output.mp4
+ax_reg.py
